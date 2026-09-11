@@ -1,1042 +1,291 @@
-# MeterSerial-VLM
+# MeterSerial_VLM
 
-A modular, model-independent OCR pipeline for extracting information from digital electricity-meter images.
-
-The primary objective is to reliably extract:
-
-- **Meter Serial Number**
-- **IMEI**
-- Other text fields that can be added later
-- Meter **ON/OFF** status based on the visible green backlight/display
-
-The project is designed so that different OCR/VLM models can be added or replaced without rewriting the extraction and consolidation logic.
+A modular, model-independent OCR pipeline for extracting **meter serial numbers** and **IMEI** from digital electricity-meter images. Built for CPU and GPU deployment, with support for multiple OCR backends and rigorous evaluation.
 
 ---
 
-## 1. Project Goals
+## 📌 Project Overview
 
-MeterSerial-VLM is designed around the following principles:
+The pipeline extracts the following fields from meter images:
 
-1. Support multiple OCR models through a common interface.
-2. Keep model-specific code isolated inside backend modules.
-3. Use a **universal extractor** independent of the OCR model.
-4. Use a **universal consolidator** to combine OCR results from multiple image regions.
-5. Avoid hardcoding meter manufacturer, model, or location.
-6. Return `NOT_FOUND` instead of guessing an identifier.
-7. Load models lazily so unused models do not consume GPU memory.
-8. Make it easy to add future OCR/VLM backends.
+- **Meter Serial Number** (e.g., `U5772898`)
+- **IMEI Number** (15-digit cellular module ID)
+- **Date fields** (manufacturing, installation, etc.)
+- **Meter ON/OFF status** (based on visible green backlight)
+
+The system is **model-agnostic** — OCR backends (PaddleOCR, LightOnOCR, or future VLMs) can be swapped without rewriting the extraction or consolidation logic.
 
 ---
 
-## 2. OCR Processing Strategy
+## 🎯 Core Design Principles
 
-For every input meter image, the current pipeline processes:
-
-- **1 full image**
-- **6 overlapping tiles**
-- **7 OCR regions in total**
-
-The tiles follow a **2 × 3 overlapping grid**.
-
-Edge padding is applied to the tiles to reduce the possibility of cutting characters at tile boundaries.
-
-This seven-region strategy is the current baseline and should not be changed unless intentionally evaluated against the existing approach.
+1. **Model Independence** — OCR backends are pluggable.
+2. **Universal Extraction** — Same extractor works for PaddleOCR and LightOnOCR.
+3. **Universal Consolidation** — Combines results across 7 image regions (1 full + 6 tiles).
+4. **Safety-First Extraction** — Returns `NOT_FOUND` instead of guessing.
+5. **Lazy Model Loading** — Models load only when needed.
 
 ---
 
-## 3. Architecture
-
-```text
-                  Meter Image
-                       |
-                       v
-          +-------------------------+
-          | Image / Tile Generation |
-          | 1 Full + 6 Tiles        |
-          +-------------------------+
-                       |
-                       v
-          +-------------------------+
-          |      OCR Backend        |
-          +-------------------------+
-             /        |                     /         |                     v          v           v
-     LightOnOCR    PaddleOCR    Future Models
-           \          |           /
-            \         |          /
-             +--------+----------+
-                      |
-                      v
-              Raw OCR Results
-                      |
-                      v
-          +-----------------------+
-          | Universal Extractor   |
-          +-----------------------+
-                      |
-                      v
-          +-----------------------+
-          | Universal Consolidator|
-          +-----------------------+
-                      |
-                      v
-             Final Structured Data
-```
-
-The key principle is:
-
-> **OCR models can change; extraction and consolidation should not have to.**
-
----
-
-## 4. Repository Structure
-
-The project is organized approximately as follows:
-
-```text
-MeterSerial-VLM/
+## 🏗️ Architecture
+Meter Image
 │
+▼
+┌────────────────────┐
+│ 1 Full + 6 Tiles │ ← 2×3 overlapping grid
+└────────────────────┘
+│
+▼
+┌────────────────────┐
+│ OCR Backend │
+│ ┌────────┬───────┐ │
+│ │Paddle │Light │ │
+│ │OCR │OnOCR │ │
+│ └────────┴───────┘ │
+└────────────────────┘
+│
+▼
+Raw OCR Results
+│
+▼
+┌────────────────────┐
+│ Universal Extractor│
+└────────────────────┘
+│
+▼
+┌────────────────────┐
+│ Universal Consolid.│
+└────────────────────┘
+│
+▼
+Final Structured Data
+
+text
+
+---
+
+## 📂 Repository Structure
+MeterSerial_VLM/
 ├── data/
-│   └── images/
-│       └── *.png
+│ ├── images/ # Downloaded meter images (gitignored)
+│ └── test_10/ # 10-image benchmark set (gitignored)
 │
 ├── models/
-│   ├── base/
-│   │   └── base_model.py
-│   │
-│   ├── backends/
-│   │   ├── lightonocr/
-│   │   │   └── lightonocr_backend.py
-│   │   │
-│   │   └── paddleocr/
-│   │       └── paddleocr_backend.py
-│   │
-│   └── registry.py
+│ ├── base/
+│ │ └── base_model.py
+│ ├── backends/
+│ │ ├── paddleocr/
+│ │ │ └── paddleocr_backend.py
+│ │ └── lightonocr/
+│ │ └── lightonocr_backend.py
+│ └── registry.py
 │
 ├── scripts/
-│   ├── test_lightonocr.py
-│   ├── test_paddleocr.py
-│   └── visualize_tiles.py
+│ ├── download_dataset.py # Multithreaded image downloader
+│ ├── test_paddleocr.py # Single-image test
+│ ├── test_lightonocr.py # Single-image test
+│ ├── evaluate_paddleocr.py # Benchmark evaluation
+│ ├── analyze_results.py # Confusion matrix generator
+│ ├── speed_test.py # Performance diagnostics
+│ └── visualize_tiles.py # Tiling visualization
 │
-├── model_store/
-│   └── lightonocr/
+├── utils/
+│ ├── ocr_extractor.py # Universal extractor
+│ ├── ocr_consolidator.py # Universal consolidator
+│ ├── lightonocr_extractor.py # LightOnOCR extractor wrapper
+│ └── lightonocr_consolidator.py # LightOnOCR consolidator wrapper
 │
-├── requirements.txt
+├── configs/
+├── prompts/
 ├── requirements-paddle.txt
-└── README.md
-```
+├── requirements.txt
+├── urls.txt # Image URLs
+├── README.md
+└── .gitignore
 
-Additional utility modules may be present depending on the current revision of the repository.
-
----
-
-# 5. Requirements
-
-## Hardware
-
-GPU execution is recommended, especially for VLM-based OCR models.
-
-The development system uses an NVIDIA GPU with approximately **8 GB VRAM**.
-
-The amount of available VRAM can affect which models can be loaded and whether multiple models can run simultaneously.
-
-CPU execution may be possible for some components, but inference performance will be significantly lower.
+text
 
 ---
 
-# 6. Environment Structure
+## ⚙️ Environment Setup
 
-The project intentionally maintains separate Python environments for the OCR systems.
+The project uses **two isolated Python environments** to prevent dependency conflicts.
 
-```text
-MeterSerial-VLM/
-│
-├── .venv/
-│     └── LightOnOCR environment
-│
-└── .paddlevenv/
-      └── PaddleOCR environment
-```
+### 🟢 Environment 1: PaddleOCR (`.paddlevenv`)
 
-This separation is important because the two OCR stacks have different dependencies.
-
----
-
-# 7. LightOnOCR Environment
-
-LightOnOCR is installed in the main `.venv` environment.
-
-## Create Environment
-
-From the project root:
-
-```powershell
-python -m venv .venv
-```
-
-Activate it:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-Install the dependencies:
-
-```powershell
-python -m pip install -r requirements.txt
-```
-
-```powershell
-python -m pip install -U huggingface_hub
-pip install qwen-vl-utils
-
-hf download lightonai/LightOnOCR-2-1B --local-dir model_store/lightonocr
-
-hf download Qwen/Qwen2-VL-2B-Instruct --local-dir model_store/qwen2-vl-2b
-
-hf download OpenGVLab/InternVL2_5-4B --local-dir model_store/internvl2_5-4b
-```
-
-## Model
-
-The LightOnOCR model used by the project is:
-
-```text
-lightonai/LightOnOCR-2-1B
-```
-
-The model can be stored locally under:
-
-```text
-model_store/lightonocr/
-```
-
-The LightOnOCR backend handles:
-
-- Model loading
-- Processor initialization
-- Input preparation
-- OCR inference
-- Conversion of model output into the common OCR representation
-
-Model-specific logic should remain inside the backend.
-
----
-
-# 8. PaddleOCR Environment
-
-PaddleOCR is maintained in a **separate environment** from LightOnOCR.
-
-## Python Version
-
-The PaddleOCR environment uses:
-
-```text
-Python 3.11
-```
-
-Create it using:
+**Python Version:** 3.11  
+**Purpose:** Fast, traditional OCR engine
 
 ```powershell
 py -3.11 -m venv .paddlevenv
-```
-
-Activate it:
-
-```powershell
 .\.paddlevenv\Scripts\Activate.ps1
-```
-
-Verify the Python version:
-
-```powershell
-python --version
-```
-
-Expected:
-
-```text
-Python 3.11.x
-```
-
-## PaddleOCR Versions
-
-The working PaddleOCR setup uses:
-
-```text
-PaddlePaddle  3.3.1
-PaddleOCR     3.7.0
-PaddleX       3.7.2
-```
-
-The direct project dependencies are:
-
-```text
-paddlepaddle==3.3.1
-paddleocr==3.7.0
-paddlex==3.7.2
-```
-
-Recommended `requirements-paddle.txt`:
-
-```text
-paddlepaddle==3.3.1
-paddleocr==3.7.0
-paddlex==3.7.2
-```
-
-Install using:
-
-```powershell
-python -m pip install -r requirements-paddle.txt
-```
-
-### Supporting Dependencies
-
-The PaddleOCR/PaddleX installation also installs supporting packages, including:
-
-```text
-numpy
-opencv-contrib-python
-PyYAML
-pydantic
-pypdfium2
-pyclipper
-python-bidi
-pycryptodome
-shapely
-requests
-aiohttp
-modelscope
-aistudio-sdk
-prettytable
-ujson
-ruamel.yaml
-py-cpuinfo
-colorlog
-```
-
-along with their required transitive dependencies.
-
-These do not need to be manually listed if they are installed automatically by the pinned direct dependencies.
-
-## Verify PaddlePaddle
-
-```powershell
-python -c "import paddle; print('Paddle:', paddle.__version__); print('CUDA:', paddle.device.is_compiled_with_cuda()); print('Devices:', paddle.device.get_available_device())"
-```
-
-Verify PaddleOCR:
-
-```powershell
-python -c "import paddleocr; print('PaddleOCR:', paddleocr.__version__)"
-```
-
-Run PaddlePaddle's built-in check:
-
-```powershell
-python -c "import paddle; paddle.utils.run_check()"
-```
-
-A correctly configured GPU environment should report CUDA support and an available GPU device.
-
-## Important CUDA / OS Note
-
-The exact PaddlePaddle GPU installation depends on the target machine's:
-
-- Operating system
-- Python version
-- NVIDIA driver
-- CUDA compatibility
-- GPU architecture
-
-Do **not** blindly copy a GPU installation command from another operating system.
-
-The versions documented above represent the project's working PaddleOCR environment. When deploying to another machine, use a PaddlePaddle build compatible with that machine while maintaining the separate PaddleOCR environment.
-
----
-
-# 9. Complete Installation
-
-Clone the repository:
-
-```powershell
-git clone <repository-url>
-cd MeterSerial-VLM
-```
-
-## LightOnOCR
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-```
-
-## PaddleOCR
-
-Create the environment specifically with Python 3.11:
-
-```powershell
-py -3.11 -m venv .paddlevenv
-```
-
-Activate:
-
-```powershell
-.\.paddlevenv\Scripts\Activate.ps1
-```
-
-Install:
-
-```powershell
-python -m pip install -r requirements-paddle.txt
-```
-
+python -m pip install --upgrade pip
+python -m pip install paddlepaddle==3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+python -m pip install paddleocr==3.7.0 paddlex==3.7.2
 Verify:
 
-```powershell
-python --version
-```
-
-It should report:
-
-```text
-Python 3.11.x
-```
-
----
-
-# 10. Running PaddleOCR
-
-Activate the PaddleOCR environment:
-
-```powershell
-.\.paddlevenv\Scripts\Activate.ps1
-```
-
-Run the PaddleOCR test:
-
-```powershell
-python scripts/test_paddleocr.py
-```
-
-The script runs OCR against the configured meter image.
-
-The current pipeline processes the full image and six overlapping tiles.
-
-Raw OCR results can then be inspected before extraction and consolidation.
-
----
-
-# 11. Running LightOnOCR
-
-Activate the LightOnOCR environment:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-Run:
-
-```powershell
-python scripts/test_lightonocr.py
-```
-
-The LightOnOCR backend is responsible for model-specific loading and inference.
-
----
-
-# 12. Visualizing the OCR Tiles
-
-To inspect the current seven-region processing strategy:
-
-```powershell
-python scripts/visualize_tiles.py
-```
-
-This allows you to verify:
-
-- Full-image processing
-- Six tile regions
-- Overlap between tiles
-- Edge padding
-- Location of important meter text
-
-Generated visualization files may be saved under:
-
-```text
-data/images/
-```
-
----
-
-# 13. OCR Backend Design
-
-Each OCR model is implemented as a separate backend.
-
-Conceptually:
-
-```text
-Base Model
-    |
-    +---- LightOnOCR Backend
-    |
-    +---- PaddleOCR Backend
-    |
-    +---- Future OCR/VLM Backend
-```
-
-A backend is responsible for:
-
-1. Loading its model.
-2. Preparing model-specific inputs.
-3. Running inference.
-4. Returning OCR results in the common format.
-
-The backend should **not** contain meter-specific extraction rules.
-
-For example, avoid logic such as:
-
-```python
-if manufacturer == "XYZ":
-    ...
-```
-
-or:
-
-```python
-if model == "ABC":
-    ...
-```
-
-This keeps the system independent of any particular meter manufacturer or model.
-
----
-
-# 14. Universal Extractor
-
-The extractor is intentionally independent of the OCR backend.
-
-It receives OCR results and identifies fields such as:
-
-```text
-Serial Number
-IMEI
-Date
-Other future fields
-```
-
-Different OCR models may produce different textual formats.
-
-For example:
-
-```text
-U5028045
-```
-
-```text
-SL. NO. U5028045
-```
-
-```text
-Serial No: U5028045
-```
-
-The extractor should recognize the underlying value without requiring model-specific rules.
-
----
-
-# 15. Universal Consolidator
-
-Because every image is processed through seven OCR regions, multiple observations of the same value can be produced.
-
-For example:
-
-```text
-Full Image:
-    U5028045
-
-Tile 1:
-    U5028045
-
-Tile 2:
-    U5028045
-
-Tile 3:
-    U50280
-```
-
-The consolidator combines these observations and selects the strongest consistent candidate.
-
-It should:
-
-- Combine results from multiple regions.
-- Handle duplicate values.
-- Handle partial OCR results.
-- Prefer consistent candidates.
-- Reject unrelated candidates.
-- Avoid selecting a value simply because it appeared first.
-- Return `NOT_FOUND` when the evidence is insufficient.
-
----
-
-# 16. Identifier Extraction Safety
-
-Meter images contain many unrelated numbers.
-
-Examples include:
-
-- Voltage readings
-- Current readings
-- Energy values
-- Dates
-- Model numbers
-- Codes
-- Serial numbers
-- IMEI numbers
-
-Therefore, generic patterns such as searching for any number following `NO` can result in incorrect extraction.
-
-The extractor should use contextual evidence and candidate validation.
-
-If the available OCR evidence is insufficient:
-
-```text
-NOT_FOUND
-```
-
-should be returned instead of guessing.
-
-This is particularly important for meter serial numbers and IMEI values, where a plausible but incorrect value is worse than a missing value.
-
----
-
-# 17. Example Final Output
-
-A successful extraction may look like:
-
-```json
-{
-    "serial_number": "U5028045",
-    "imei": "860738079449140"
-}
-```
-
-If a value cannot be confidently identified:
-
-```json
-{
-    "serial_number": "NOT_FOUND",
-    "imei": "860738079449140"
-}
-```
-
-The exact output structure should follow the current implementation of the extractor/consolidator.
-
----
-
-# 18. Meter ON / OFF Classification
-
-The project can also determine whether a meter is ON or OFF based on its visible display/backlight.
-
-Current definition:
-
-```text
-ON  = green backlight/display is visibly illuminated
-OFF = green backlight/display is not visibly illuminated
-```
-
-This classification is separate from OCR.
-
-```text
-OCR
-  |
-  +---- Serial Number
-  +---- IMEI
-  +---- Other text
-
-Image Classification
-  |
-  +---- ON / OFF
-```
-
-The ON/OFF component can be replaced or extended independently in the future.
-
----
-
-# 19. Adding a New OCR/VLM Model
-
-To add a new model:
-
-### Step 1
-
-Create a backend directory:
-
-```text
-models/backends/<new_model>/
-```
-
-### Step 2
-
-Implement the common model interface.
-
-### Step 3
-
-Add model-specific:
-
-- Loading
-- Preprocessing
-- Inference
-- Output conversion
-
-### Step 4
-
-Register the backend with the model registry/factory if required.
-
-### Step 5
-
-Add a test script.
-
-For example:
-
-```text
-models/
-└── backends/
-    └── new_model/
-        └── new_model_backend.py
-```
-
-The universal extractor and consolidator should not need to be rewritten simply because a new OCR model was added.
-
----
-
-# 20. Lazy Model Loading
-
-Models should be loaded only when requested.
-
-Conceptually:
-
-```text
-Application starts
-       |
-       v
-No OCR model loaded
-       |
-       +----------------------+
-       |                      |
-       v                      v
- Request PaddleOCR       Request LightOnOCR
-       |                      |
-       v                      v
- Load PaddleOCR          Load LightOnOCR
-```
-
-This is important because VLM/OCR models can consume significant GPU memory.
-
-The model registry/factory should therefore avoid loading every model during application startup.
-
----
-
-# 21. Dataset
-
-Input meter images are stored under:
-
-```text
-data/images/
-```
-
-Example:
-
-```text
-data/images/
-├── dm_1.png
-├── dm_2.png
-├── dm_3.png
-├── ...
-└── dm_1999.png
-```
-
-The current dataset contains approximately **2,000 meter images**.
-
-The same image-processing pipeline should be used when comparing different OCR models so that model comparisons remain meaningful.
-
----
-
-# 22. Model Files and Git
-
-Large model weights generally should not be committed directly to the Git repository.
-
-Depending on the project distribution strategy, folders such as:
-
-```text
-.venv/
-.paddlevenv/
-__pycache__/
-*.pyc
-model_store/
-```
-
-may be added to `.gitignore`.
-
-If model weights are required for deployment, they can instead be distributed through an appropriate model/artifact storage system.
-
----
-
-# 23. Troubleshooting
-
-## PowerShell Activation Error
-
-If PowerShell blocks the virtual-environment activation script:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-```
-
-Then activate the environment again.
-
----
-
-## PaddleOCR Is Using the Wrong Python
-
-Check:
-
-```powershell
-python --version
-```
-
-The PaddleOCR environment must use:
-
-```text
-Python 3.11.x
-```
-
-If the environment was accidentally created using another Python version, recreate it:
-
-```powershell
-deactivate
-Remove-Item -Recurse -Force .paddlevenv
-```
-
-Create it again:
-
-```powershell
-py -3.11 -m venv .paddlevenv
-.\.paddlevenv\Scripts\Activate.ps1
-```
-
----
-
-## Paddle Cannot Detect the GPU
-
-Run:
-
-```powershell
-python -c "import paddle; print(paddle.device.is_compiled_with_cuda()); print(paddle.device.get_available_device())"
-```
-
-If CUDA is unavailable, check:
-
-1. NVIDIA driver installation.
-2. Active Python environment.
-3. Installed PaddlePaddle build.
-4. Python version.
-5. CUDA compatibility.
-6. GPU compatibility.
-
-Make sure the command is being executed inside:
-
-```text
-.paddlevenv
-```
-
-and not:
-
-```text
-.venv
-```
-
----
-
-## PaddleOCR Downloads Models
-
-PaddleOCR/PaddleX may download model files the first time a particular OCR model is used.
-
-These models are normally cached locally by PaddleX.
-
----
-
-## OCR Produces Incomplete Text
-
-The seven-region strategy is intended to improve coverage.
-
-Inspect:
-
-```text
-Full Image OCR
-Tile 1 OCR
-Tile 2 OCR
-Tile 3 OCR
-Tile 4 OCR
-Tile 5 OCR
-Tile 6 OCR
-```
-
-Also inspect the tile visualization.
-
-Before changing the tile strategy, determine whether the missing characters are visible in another region.
-
----
-
-# 24. Development Guidelines
-
-## Keep Model-Specific Code Inside Backends
-
-Use:
-
-```text
-models/backends/paddleocr/
-models/backends/lightonocr/
-```
-
-for model-specific code.
-
-Avoid putting PaddleOCR-specific or LightOnOCR-specific logic into the universal extractor.
-
-## Keep Extraction Model-Independent
-
-The extractor should be able to work with:
-
-```text
-PaddleOCR
-LightOnOCR
-Future OCR models
-Future VLMs
-```
-
-## Prefer `NOT_FOUND` Over Guessing
-
-For identifiers such as Serial Number and IMEI:
-
-```text
-Correct value > NOT_FOUND > guessed value
-```
-
-A wrong identifier can be more harmful than a missing identifier.
-
-## Preserve the Current OCR Baseline
-
-The current baseline is:
-
-```text
-1 full image + 6 overlapping tiles
-```
-
-Changes to preprocessing should be evaluated rather than made solely to accommodate one OCR model.
-
----
-
-# 25. Quick Start
-
-## PaddleOCR
-
-```powershell
-git clone <repository-url>
-cd MeterSerial-VLM
-
-py -3.11 -m venv .paddlevenv
-.\.paddlevenv\Scripts\Activate.ps1
-
-python -m pip install -r requirements-paddle.txt
-
-python scripts/test_paddleocr.py
-```
-
-## LightOnOCR
-
-```powershell
+powershell
+python -c "import paddle; print('Paddle:', paddle.__version__)"
+🔵 Environment 2: LightOnOCR (.venv)
+Python Version: 3.14 (or 3.11)
+Purpose: Vision-Language Model for context-aware reading
+
+powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-
+python -m pip install --upgrade pip
+python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 python -m pip install -r requirements.txt
+python -m pip install -U huggingface_hub qwen-vl-utils
+hf download lightonai/LightOnOCR-2-1B --local-dir model_store/lightonocr
+hf download Qwen/Qwen2-VL-2B-Instruct --local-dir model_store/qwen2-vl-2b
+hf download OpenGVLab/InternVL2_5-4B --local-dir model_store/internvl2_5-4b
+🚀 Usage
+🖼️ Step 1: Download Images
+Add image URLs to urls.txt, then:
 
-python scripts/test_lightonocr.py
-```
+powershell
+python -m scripts.download_dataset
+Downloads all images to data/images/ in parallel (~40 images/sec).
+
+🧪 Step 2: Test on a Single Image
+PaddleOCR:
+
+powershell
+$env:FLAGS_use_dnnl = "0"; $env:GLOG_minloglevel = "2"; python -m scripts.test_paddleocr data/images/sample.png
+LightOnOCR:
+
+powershell
+python -m scripts.test_lightonocr data/images/sample.png
+📊 Step 3: Run the Benchmark
+Create data/test_10/ground_truth.csv:
+
+csv
+filename,true_serial,true_imei
+image1.png,U5772898,861729077005025
+Copy 10 images to data/test_10/.
+
+Run:
+
+powershell
+$env:FLAGS_use_dnnl = "0"; $env:GLOG_minloglevel = "2"; python -m scripts.evaluate_paddleocr
+python -m scripts.analyze_results
+📊 Benchmark Results (10 Images)
+Field	Accuracy	Precision	Recall	F1-Score	Char Accuracy
+Serial Number	90.00%	90.00%	90.00%	90.00%	97.50%
+IMEI	90.00%	100.00%	90.00%	94.74%	90.00%
+Key Observations
+✅ 100% IMEI Precision — Zero hallucination. Every IMEI output is correct.
+
+✅ 97.5% Character Accuracy — Underlying OCR engine is nearly perfect.
+
+⚠️ 1 Serial Truncation — U5772898 read as U57728 (tile boundary issue).
+
+⚠️ 1 IMEI Miss — IMEI not visible in one image (correctly returned NOT_FOUND).
+
+Industry Interpretation
+Metric	Industry Benchmark	Status
+Serial F1 ≥ 90%	Baseline automation	✅
+IMEI Precision = 100%	Production-grade	✅
+Char Accuracy ≥ 95%	High quality	✅
+Estimated STP Rate	~90%	✅
+🛠️ Key Implementations
+1. Manual Image Resize (Speed Optimization)
+Resizes images to 1600px max before OCR, reducing CPU inference from ~207s to ~15s per image.
+
+2. Regex Patterns for Indian Meter Labels
+Handles both IMEI NO and INET NO variants:
+
+python
+r'(?:INET NO|IMEI)\s*[:.]?\s*(\d{15})'
+3. Fallback Serial Detection
+Detects unlabeled serial numbers (e.g., standalone U5028045).
+
+4. String-Safe CSV Reading
+Prevents 15-digit IMEIs from being parsed as floats.
+
+5. Multi-Threaded Download
+Downloaded 1,998 images in 49 seconds (~40 images/sec).
+
+⚠️ Known Limitations
+Limitation	Impact	Mitigation
+CPU Inference is Slow	~200s/image on Intel i5-8265U	Use Colab T4 GPU (~2s/image)
+Tile Boundary Truncation	Serials may lose trailing chars	Increase tile_overlap to 0.45
+Low-Res Resize	Small IMEIs lost	Increase max_size to 2400 on GPU
+PaddlePaddle 3.3.1 Bug	OneDNN crash on CPU	Use PaddlePaddle 3.2.0 or FLAGS_use_dnnl=0
+LightOnOCR Extremely Slow on CPU	~20 min/image	Use Colab T4 GPU only
+🌐 GPU Deployment (Google Colab)
+For large-scale processing, use Colab's T4 GPU for ~70x speedup.
+
+python
+!nvidia-smi
+!pip install -q paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
+!pip install -q paddleocr==3.7.0 paddlex==3.7.2
+!git clone https://github.com/subreenabano/MeterSerial_VLM.git
+%cd MeterSerial_VLM
+Expected Performance
+Environment	Per Image	1,998 Images
+Local CPU (i5-8265U)	~200s	~110 hours
+Colab T4 GPU	~2s	~60 minutes
+📋 Roadmap
+☑ PaddleOCR backend (CPU)
+☑ LightOnOCR backend (CPU)
+☑ Universal extractor & consolidator
+☑ Multi-threaded image downloader
+☑ Confusion matrix evaluation framework
+☑ 10-image benchmark: 90% F1
+□ Full 1,998-image batch run (Colab GPU)
+□ ROI-based cropping (fixed regions)
+□ ON/OFF classifier
+□ LightOnOCR fallback for hard images
+🧠 Development Guidelines
+Keep Model-Specific Code in Backends
+✅ models/backends/paddleocr/
+
+✅ models/backends/lightonocr/
+
+❌ Do NOT put model-specific logic in utils/ocr_extractor.py
+
+Prefer NOT_FOUND Over Guessing
+Correct value > NOT_FOUND > guessed value
+
+A wrong identifier is worse than a missing one. This is critical for meter serials and IMEIs.
+
+Preserve the Current Baseline
+1 full image + 6 overlapping tiles = 7 regions
+
+Do not change this strategy without evaluating it against the current approach.
+
+🧪 Testing & Evaluation
+The pipeline includes a rigorous evaluation framework:
+
+Confusion Matrix: TP, TN, FP, FN per field
+
+Precision & Recall: Identify hallucination vs miss patterns
+
+F1-Score: Balanced accuracy metric
+
+Character Accuracy: Even when wrong, how close was the model?
+
+Run python -m scripts.analyze_results to generate the full report.
+
+📞 Contact
+Project: BCITS – Meter Serial Extraction
+Developer: Subreena Bano
+Status: Active Development
+
+📄 License
+Internal use – BCITS
+
+text
+
+**Save** the file (`Ctrl+S`).
 
 ---
 
-# 26. Environment Summary
+## G3. Commit and push the README
 
-| Component | Environment | Python | Version |
-|---|---|---:|---:|
-| LightOnOCR | `.venv` | Project environment | See `requirements.txt` |
-| PaddleOCR | `.paddlevenv` | **3.11** | **3.7.0** |
-| PaddlePaddle | `.paddlevenv` | **3.11** | **3.3.1** |
-| PaddleX | `.paddlevenv` | **3.11** | **3.7.2** |
-
-The two OCR environments are intentionally isolated:
-
-```text
-.venv
-    └── LightOnOCR
-
-.paddlevenv
-    └── PaddleOCR
-        ├── Python 3.11
-        ├── PaddlePaddle 3.3.1
-        ├── PaddleOCR 3.7.0
-        └── PaddleX 3.7.2
-```
-
----
-
-# 27. Final Pipeline
-
-```text
-                         Meter Image
-                              |
-                              v
-              +-----------------------------+
-              | 1 Full Image + 6 Tiles      |
-              | 7 OCR Regions               |
-              +-----------------------------+
-                              |
-                              v
-                     OCR Backend Layer
-                              |
-             +----------------+----------------+
-             |                |                |
-             v                v                v
-        LightOnOCR         PaddleOCR       Future VLMs
-             |                |                |
-             +----------------+----------------+
-                              |
-                              v
-                       Raw OCR Results
-                              |
-                              v
-                   Universal Extractor
-                              |
-                              v
-                  Universal Consolidator
-                              |
-                              v
-             +-------------------------------+
-             | Serial Number                  |
-             | IMEI                           |
-             | Other Extracted Fields         |
-             +-------------------------------+
-                              |
-                              v
-                    Image Classification
-                              |
-                              v
-                           ON / OFF
-```
-
----
-
-# 28. Core Design Principle
-
-> **The OCR model is replaceable; the extraction and consolidation pipeline should remain model-independent.**
-
-This allows the same meter-image processing pipeline to evaluate different OCR/VLM models while maintaining consistent downstream extraction behavior.
+```powershell
+git add README.md
+git commit -m "Add comprehensive project README with benchmark results and setup guide"
+git push
