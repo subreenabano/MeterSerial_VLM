@@ -36,7 +36,7 @@ class PaddleOCRBackend(BaseMeterModel):
         # Same tiling configuration as LightOnOCR.
         self.tile_rows = 2
         self.tile_columns = 3
-        self.tile_overlap = 0.35
+        self.tile_overlap = 0.45
 
     def load(self, model_path: Path | None = None) -> None:
         """
@@ -48,7 +48,7 @@ class PaddleOCRBackend(BaseMeterModel):
 
         self.ocr = PaddleOCR(
             lang="en",
-            device="gpu",
+            device="cpu",
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
@@ -103,13 +103,6 @@ class PaddleOCRBackend(BaseMeterModel):
         tile_height = math.ceil(
             height / (
                 rows
-            - overlap * (rows - 1)
-            )
-        )
-
-        tile_height = math.ceil(
-            height / (
-                rows
                 - overlap * (rows - 1)
             )
         )
@@ -139,7 +132,6 @@ class PaddleOCRBackend(BaseMeterModel):
             16,
             int(tile_height * 0.10),
         )
-    
 
         tiles: list[Image.Image] = []
 
@@ -284,6 +276,18 @@ class PaddleOCRBackend(BaseMeterModel):
         PaddleOCR 3.x expects a numpy.ndarray or image path,
         not a PIL Image.
         """
+
+        # ---------------------------------------------------------
+        # FORCE RESIZE TO 1600px FOR SPEED
+        # ---------------------------------------------------------
+        max_size = 2400
+        width, height = image.size
+        if max(width, height) > max_size:
+            ratio = max_size / max(width, height)
+            new_width = int(width * ratio)
+            new_height = int(height * ratio)
+            image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        # ---------------------------------------------------------
 
         if self.ocr is None:
             raise RuntimeError(

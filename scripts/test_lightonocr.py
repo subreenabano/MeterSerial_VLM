@@ -9,11 +9,11 @@ from typing import Any
 from models.backends.lightonocr.lightonocr_backend import (
     LightOnOCRBackend,
 )
-from utils.lightonocr_extractor import (
-    LightOnOCRExtractor,
+from utils.ocr_extractor import (
+    UniversalOCRExtractor as LightOnOCRExtractor,
 )
-from utils.lightonocr_consolidator import (
-    LightOnOCRConsolidator,
+from utils.ocr_consolidator import (
+    UniversalOCRConsolidator as LightOnOCRConsolidator,
 )
 
 

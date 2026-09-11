@@ -1,7 +1,7 @@
 # importing libraries
 
-from utils.lightonocr_extractor import (
-    LightOnOCRExtractor,
+from utils.ocr_extractor import (
+    UniversalOCRExtractor as LightOnOCRExtractor,
 )
 
 

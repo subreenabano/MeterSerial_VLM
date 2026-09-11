@@ -1,86 +1,62 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-
+# ----------------------------------------
 # Virtual environments
+# ----------------------------------------
+.paddlevenv/
 .venv/
 venv/
 env/
 ENV/
-.paddlevenv/
 
-# Python tooling
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-.tox/
-.nox/
-
-# IDE
-.vscode/
-.idea/
-
-# Environment variables and secrets
-.env
-.env.*
-!.env.example
-
-# Model weights and local model cache
-model_store/
-models_cache/
-.cache/
-huggingface_cache/
-*.safetensors
-*.bin
-*.pt
-*.pth
-*.ckpt
-
-# Hugging Face cache
-**/.cache/huggingface/
-
-# Logs
-*.log
-logs/
-
-# Temporary files
-tmp/
-temp/
-
-# Generated outputs
-outputs/
-results/
-benchmarks/
-runs/
-
-# Local datasets
-data/raw/
-data/private/
-data/processed/
-
-# Local meter images
+# ----------------------------------------
+# Downloaded images (large files)
+# ----------------------------------------
 data/images/
+data/test_10/
+data/benchmark/
 
-# Jupyter
+# ----------------------------------------
+# Model weights (multiple GB)
+# ----------------------------------------
+model_store/
+
+# ----------------------------------------
+# Temporary outputs
+# ----------------------------------------
+results*.csv
+predictions*.csv
+evaluation_report.txt
+
+# ----------------------------------------
+# Python cache
+# ----------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py[cod]
+*$py.class
 .ipynb_checkpoints/
 
+# ----------------------------------------
+# Environment & secrets
+# ----------------------------------------
+.env
+
+# ----------------------------------------
+# VS Code
+# ----------------------------------------
+.vscode/
+
+# ----------------------------------------
 # OS files
+# ----------------------------------------
 .DS_Store
 Thumbs.db
 desktop.ini
 
+# ----------------------------------------
 # Build artifacts
+# ----------------------------------------
 build/
 dist/
 *.egg-info/
-
-# Test artifacts
-.pytest_cache/
-
-#zip files
-*.rar
-*.zip

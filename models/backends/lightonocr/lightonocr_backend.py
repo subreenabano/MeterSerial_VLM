@@ -14,8 +14,7 @@ from transformers import (
 
 from models.base.base_model import BaseMeterModel
 from models.registry import ModelRegistry
-from utils.lightonocr_extractor import LightOnOCRExtractor
-
+from utils.ocr_extractor import UniversalOCRExtractor as LightOnOCRExtractor
 
 class LightOnOCRBackend(BaseMeterModel):
     """
@@ -59,10 +58,10 @@ class LightOnOCRBackend(BaseMeterModel):
         self.model = LightOnOcrForConditionalGeneration.from_pretrained(
             model_path,
             torch_dtype=self.dtype,
-            device_map="auto",
         )
 
         self.model.eval()
+        self.model.to(self.device)
         self.is_loaded = True
 
     def unload(self) -> None:
