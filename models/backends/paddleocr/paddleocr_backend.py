@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from email.mime import image
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
 from paddleocr import PaddleOCR
+
+import paddle
 
 from models.base.base_model import BaseMeterModel
 from models.registry import ModelRegistry
@@ -25,6 +26,12 @@ class PaddleOCRBackend(BaseMeterModel):
         - tile_4
         - tile_5
         - tile_6
+
+    Device selection is automatic:
+        - If a GPU is attached AND Paddle was compiled with CUDA → use GPU
+        - Otherwise → use CPU
+    This means the same code works in GPU-enabled and CPU-only
+    Colab runtimes without manual edits.
     """
 
     def __init__(self) -> None:
@@ -33,6 +40,7 @@ class PaddleOCRBackend(BaseMeterModel):
 
         self.ocr = None
         self.is_loaded = False
+        self._device = "cpu"   # actual device used after load()
 
         # Same tiling configuration as LightOnOCR.
         self.tile_rows = 2
@@ -43,19 +51,39 @@ class PaddleOCRBackend(BaseMeterModel):
         """
         Initialize PaddleOCR.
 
+        Auto-detects whether a GPU is available. PaddlePaddle's
+        `is_compiled_with_cuda()` alone is not enough — the wheel
+        might be CUDA-enabled but the runtime might have no GPU
+        attached. `device_count() > 0` confirms an actual GPU.
+
         PaddleOCR downloads/loads its own OCR models, so model_path
         is currently unused.
         """
 
+        # ---- Auto-detect device ----
+        device = "cpu"
+        try:
+            if (
+                paddle.device.is_compiled_with_cuda()
+                and paddle.device.cuda.device_count() > 0
+            ):
+                device = "gpu"
+        except Exception:
+            device = "cpu"
+
+        self._device = device
+
         self.ocr = PaddleOCR(
             lang="en",
-            device="gpu",
+            device=device,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
         )
 
         self.is_loaded = True
+
+        print(f"[PaddleOCRBackend] Loaded on device: {device}")
 
     def unload(self) -> None:
         """
@@ -74,7 +102,7 @@ class PaddleOCRBackend(BaseMeterModel):
 
         Strategy:
             - 2 rows x 3 columns
-            - 35% overlap
+            - 45% overlap
             - 10% padding around every tile
             - Edge tiles are padded rather than clipped
 
@@ -279,7 +307,7 @@ class PaddleOCRBackend(BaseMeterModel):
         """
 
         # ---------------------------------------------------------
-        # FORCE RESIZE TO 1600px FOR SPEED
+        # Cap image size to keep OCR fast and memory-safe.
         # ---------------------------------------------------------
         max_size = 2400
         width, height = image.size
@@ -287,7 +315,10 @@ class PaddleOCRBackend(BaseMeterModel):
             ratio = max_size / max(width, height)
             new_width = int(width * ratio)
             new_height = int(height * ratio)
-            image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            image = image.resize(
+                (new_width, new_height),
+                Image.Resampling.LANCZOS,
+            )
         # ---------------------------------------------------------
 
         if self.ocr is None:
@@ -350,9 +381,8 @@ class PaddleOCRBackend(BaseMeterModel):
                     continue
 
                 # Keep reasonably confident OCR.
-                # Lowered from 0.30 to 0.15 so that low-confidence
-                # tile reads (e.g. serial near tile boundary) still
-                # reach the extractor + consolidator layer.
+                # 0.15 threshold — low enough to keep tile reads
+                # near boundaries, high enough to drop garbage.
                 if scores:
 
                     try:
@@ -470,7 +500,7 @@ class PaddleOCRBackend(BaseMeterModel):
 
         return {
             "name": self.model_name,
-            "device": "cpu",
+            "device": self._device,   # actual device, not hardcoded
             "loaded": self.is_loaded,
             "tile_rows":
                 self.tile_rows,
