@@ -12,6 +12,7 @@ from models.registry import ModelRegistry
 import math
 import numpy as np
 
+
 class PaddleOCRBackend(BaseMeterModel):
     """
     PaddleOCR backend for electricity-meter text recognition.
@@ -349,6 +350,9 @@ class PaddleOCRBackend(BaseMeterModel):
                     continue
 
                 # Keep reasonably confident OCR.
+                # Lowered from 0.30 to 0.15 so that low-confidence
+                # tile reads (e.g. serial near tile boundary) still
+                # reach the extractor + consolidator layer.
                 if scores:
 
                     try:
@@ -356,7 +360,7 @@ class PaddleOCRBackend(BaseMeterModel):
                             scores[index]
                         )
 
-                        if score < 0.30:
+                        if score < 0.15:
                             continue
 
                     except (
