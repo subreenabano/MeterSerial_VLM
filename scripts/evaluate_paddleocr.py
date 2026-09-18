@@ -3,17 +3,19 @@ import time
 from pathlib import Path
 from models.backends.paddleocr.paddleocr_backend import PaddleOCRBackend
 from utils.ocr_extractor import UniversalOCRExtractor
+from utils.ocr_consolidator import UniversalOCRConsolidator
 
 # --- Configuration ---
 IMAGE_DIR = Path("data/test_10")
 GROUND_TRUTH = Path("data/test_10/ground_truth.csv")
 PRED_CSV = "predictions_test.csv"
 
+
 def run_predictions():
     if not GROUND_TRUTH.exists():
         print(f"❌ Ground truth file not found: {GROUND_TRUTH}")
         return
-    
+
     gt_df = pd.read_csv(GROUND_TRUTH)
     print(f"Found {len(gt_df)} ground truth entries.\n")
 
@@ -21,6 +23,7 @@ def run_predictions():
     backend = PaddleOCRBackend()
     backend.load()
     extractor = UniversalOCRExtractor()
+    consolidator = UniversalOCRConsolidator()
 
     results = []
     start = time.time()
@@ -36,11 +39,18 @@ def run_predictions():
             processed = backend.preprocess(img_path)
             raw = backend.predict(processed)
             final = backend.postprocess(raw)
-            
-            all_raw_text = "\n".join([r["raw_output"] for r in final["regions"]])
-            extracted = extractor.extract(all_raw_text)
-            pred_serial = extracted.get("serial_number", "")
-            pred_imei = extracted.get("imei", "")
+
+            # -------- PER-REGION EXTRACTION --------
+            region_results = {}
+            for r in final["regions"]:
+                region_name = r["region"]
+                raw_output = r["raw_output"]
+                region_results[region_name] = extractor.extract(raw_output)
+
+            # -------- CROSS-REGION CONSOLIDATION --------
+            final_result = consolidator.consolidate(region_results)
+            pred_serial = final_result.get("serial_number", "")
+            pred_imei = final_result.get("imei", "")
 
             results.append({
                 "filename": img_path.name,
@@ -50,7 +60,7 @@ def run_predictions():
                 "pred_imei": pred_imei,
             })
             print(f"   → Serial: {pred_serial} | IMEI: {pred_imei}\n")
-            
+
         except Exception as e:
             print(f"   ❌ Error: {e}\n")
 
@@ -59,6 +69,7 @@ def run_predictions():
     elapsed = time.time() - start
     print(f"✅ Predictions saved to {PRED_CSV}")
     print(f"⏱️ Total time: {elapsed/60:.2f} min ({elapsed/max(len(results),1):.1f}s per image)")
+
 
 if __name__ == "__main__":
     run_predictions()
