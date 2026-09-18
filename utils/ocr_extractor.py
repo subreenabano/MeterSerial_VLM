@@ -24,7 +24,7 @@ class UniversalOCRExtractor:
        Blurry / occluded / missing → return "" with confidence="none".
 
     3. STRICT PATTERN GATE.
-         Serial  ->  ^U\\d{5,10}$   OR   ^\\d{7,10}$
+         Serial  ->  ^U\\d{7}$       OR   ^\\d{8}$
          IMEI    ->  ^(86|35|99)\\d{13}$  (15 digits)
 
     4. MULTI-REGION CONSENSUS.
@@ -109,15 +109,15 @@ class UniversalOCRExtractor:
     # VALUE PATTERNS
     # =========================================================
 
-    # U + 5-10 digits (Schneider). Optional space after U.
-    # 5-digit serials exist in dataset (e.g. U57744).
-    SERIAL_U_PREFIX = re.compile(r"\bU\s?(\d{5,10})\b")
+    # U + exactly 7 digits (8 chars total).
+    SERIAL_U_PREFIX = re.compile(r"\bU\s?(\d{7})\b")
 
-    SERIAL_NUMERIC = re.compile(r"\b(\d{7,10})\b")
+    # Exactly 8 pure digits.
+    SERIAL_NUMERIC = re.compile(r"\b(\d{8})\b")
 
-    SERIAL_LETTER_BLEED = re.compile(r"\b([A-Z])\s?(\d{7,10})\b")
+    SERIAL_LETTER_BLEED = re.compile(r"\b([A-Z])\s?(\d{8})\b")
 
-    SERIAL_SPACED = re.compile(r"\b(\d{3,5})[\s\-](\d{3,5})\b")
+    SERIAL_SPACED = re.compile(r"\b(\d{3,4})[\s\-](\d{4,5})\b")
 
     IMEI_PATTERN = re.compile(r"\b((?:86|35|99)\d{13})\b")
 
@@ -324,8 +324,6 @@ class UniversalOCRExtractor:
                 candidates.append((f"U{m.group(1)}", "u_prefix"))
 
         # ---- PASS 4: BARE LETTER-BLEED LINE ----
-        # OCR sometimes emits a line like "N25367690"
-        # where the label letter bled into the serial.
         for line in lines:
             if self.IMEI_LABEL_INLINE.search(line):
                 continue
@@ -376,7 +374,7 @@ class UniversalOCRExtractor:
         for m in self.SERIAL_SPACED.finditer(text):
             a, b = m.group(1), m.group(2)
             combined = a + b
-            if 7 <= len(combined) <= 10:
+            if len(combined) == 8:
                 return combined, "spaced"
 
         m = self.SERIAL_NUMERIC.search(text)
