@@ -32,6 +32,15 @@ class PaddleOCRBackend(BaseMeterModel):
         - Otherwise → use CPU
     This means the same code works in GPU-enabled and CPU-only
     Colab runtimes without manual edits.
+
+    Confidence handling:
+        - A global floor (self.min_ocr_score = 0.15) drops near-garbage
+          OCR lines before they reach downstream code.
+        - A stricter IMEI floor (self.imei_min_confidence = 0.70) is
+          carried through postprocess() so the extractor can apply it
+          only to IMEI candidates. Serial extraction keeps using the
+          permissive global floor, because serial has additional
+          safeguards (pattern gate + multi-region consensus).
     """
 
     def __init__(self) -> None:
@@ -46,6 +55,20 @@ class PaddleOCRBackend(BaseMeterModel):
         self.tile_rows = 2
         self.tile_columns = 3
         self.tile_overlap = 0.45
+
+        # ---------------------------------------------------------
+        # NEW: per-field confidence floors.
+        #
+        # self.min_ocr_score — global floor applied inside _run_ocr.
+        #   Kept low so partial boundary reads survive for the
+        #   multi-region consolidator to stitch together.
+        #
+        # self.imei_min_confidence — stricter floor for IMEI only.
+        #   Not applied here; carried through postprocess() and
+        #   enforced by UniversalOCRExtractor._imei_candidates().
+        # ---------------------------------------------------------
+        self.min_ocr_score = 0.15
+        self.imei_min_confidence = 0.70
 
     def load(self, model_path: Path | None = None) -> None:
         """
@@ -298,9 +321,13 @@ class PaddleOCRBackend(BaseMeterModel):
     def _run_ocr(
         self,
         image: Image.Image,
-    ) -> str:
+    ) -> list[tuple[str, float]]:
         """
         Run PaddleOCR on a single image region.
+
+        Returns a list of (text, score) tuples instead of a
+        newline-joined string, so that downstream code can apply
+        field-specific confidence floors (e.g. stricter for IMEI).
 
         PaddleOCR 3.x expects a numpy.ndarray or image path,
         not a PIL Image.
@@ -335,7 +362,12 @@ class PaddleOCRBackend(BaseMeterModel):
             input=image_array,
         )
 
-        lines: list[str] = []
+        # ---------------------------------------------------------
+        # CHANGED: list of (text, score) tuples instead of bare
+        # strings. Score is preserved so the extractor can apply
+        # field-specific floors.
+        # ---------------------------------------------------------
+        lines: list[tuple[str, float]] = []
 
         for page in result:
 
@@ -381,28 +413,27 @@ class PaddleOCRBackend(BaseMeterModel):
                     continue
 
                 # Keep reasonably confident OCR.
-                # 0.15 threshold — low enough to keep tile reads
-                # near boundaries, high enough to drop garbage.
+                # Global floor is intentionally low — tile reads
+                # near boundaries often score lower, and the
+                # multi-region consolidator is designed to stitch
+                # partial reads together.
+                score = 1.0
                 if scores:
-
                     try:
-                        score = float(
-                            scores[index]
-                        )
-
-                        if score < 0.15:
-                            continue
-
+                        score = float(scores[index])
                     except (
                         ValueError,
                         TypeError,
                         IndexError,
                     ):
-                        pass
+                        score = 1.0
 
-                lines.append(text)
+                if score < self.min_ocr_score:
+                    continue
 
-        return "\n".join(lines)
+                lines.append((text, score))
+
+        return lines
 
     def predict(
         self,
@@ -426,7 +457,7 @@ class PaddleOCRBackend(BaseMeterModel):
         ]
 
         candidates: list[
-            dict[str, str]
+            dict[str, Any]
         ] = []
 
         # Full image.
@@ -437,7 +468,7 @@ class PaddleOCRBackend(BaseMeterModel):
         candidates.append(
             {
                 "region": "full_image",
-                "output": full_output,
+                "output": full_output,   # list[(text, score)]
             }
         )
 
@@ -454,7 +485,7 @@ class PaddleOCRBackend(BaseMeterModel):
                 {
                     "region":
                         f"tile_{index + 1}",
-                    "output": output,
+                    "output": output,    # list[(text, score)]
                 }
             )
 
@@ -467,11 +498,17 @@ class PaddleOCRBackend(BaseMeterModel):
         prediction: dict[str, Any],
     ) -> dict[str, Any]:
         """
-        Return raw OCR regions.
+        Return raw OCR regions plus scored lines.
 
         Serial/IMEI extraction is intentionally kept outside
         the backend so PaddleOCR and LightOnOCR can use the
         same deterministic extraction/consolidation layer.
+
+        Each region now carries THREE pieces of information:
+            - raw_output    : str — backward-compatible flat text
+            - scored_lines  : list[(text, score)] — for field gates
+            - And the top-level result carries imei_min_confidence
+              so the extractor knows which floor to enforce.
         """
 
         regions = []
@@ -480,18 +517,26 @@ class PaddleOCRBackend(BaseMeterModel):
             "candidates"
         ]:
 
+            scored_lines = candidate["output"]   # list[(text, score)]
+            flat_text = "\n".join(
+                text for text, _score in scored_lines
+            )
+
             regions.append(
                 {
                     "region":
                         candidate["region"],
                     "raw_output":
-                        candidate["output"],
+                        flat_text,
+                    "scored_lines":
+                        scored_lines,
                 }
             )
 
         return {
             "model": self.model_name,
             "regions": regions,
+            "imei_min_confidence": self.imei_min_confidence,
         }
 
     def get_model_info(
@@ -508,6 +553,10 @@ class PaddleOCRBackend(BaseMeterModel):
                 self.tile_columns,
             "tile_overlap":
                 self.tile_overlap,
+            "min_ocr_score":
+                self.min_ocr_score,
+            "imei_min_confidence":
+                self.imei_min_confidence,
         }
 
 

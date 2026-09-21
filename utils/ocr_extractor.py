@@ -36,9 +36,17 @@ class UniversalOCRExtractor:
     6. LETTER-BLEED HANDLING.
        "N25367690" -> 25367690.
 
-    7. BACKWARD-COMPATIBLE API.
+    7. FIELD-SPECIFIC CONFIDENCE.
+       IMEI candidates may be gated by a per-line OCR confidence floor
+       (imei_min_confidence). Serial candidates are not gated here —
+       they rely on pattern + multi-region consensus instead.
+
+    8. BACKWARD-COMPATIBLE API.
        .extract(text)              -> single blob
        .extract_from_regions(...)  -> multi-region with confidence
+       extract_from_regions() accepts either:
+           {region: "text"}
+       or  {region: {"raw_output": str, "scored_lines": [(text, score)]}}
     """
 
     # =========================================================
@@ -109,17 +117,10 @@ class UniversalOCRExtractor:
     # VALUE PATTERNS
     # =========================================================
 
-    # Meter serial shapes in this dataset:
-    #   U + exactly 7 digits (e.g. U5776015)  →  8 chars total
-    #   exactly 8 pure digits (e.g. 25356384)
     SERIAL_U_PREFIX = re.compile(r"\bU\s?(\d{7})\b")
-
     SERIAL_NUMERIC = re.compile(r"\b(\d{8})\b")
-
     SERIAL_LETTER_BLEED = re.compile(r"\b([A-Z])\s?(\d{8})\b")
-
     SERIAL_SPACED = re.compile(r"\b(\d{3,4})[\s\-](\d{4,5})\b")
-
     IMEI_PATTERN = re.compile(r"\b((?:86|35|99)\d{13})\b")
 
     BLEED_LETTERS = {"N", "S", "I", "O", "L", "Z", "B", "G", "Q", "D"}
@@ -128,20 +129,30 @@ class UniversalOCRExtractor:
     # CONSTRUCTOR
     # =========================================================
 
-    def __init__(self, min_regions: int = 2) -> None:
+    def __init__(
+        self,
+        min_regions: int = 2,
+        imei_min_confidence: float = 0.70,
+    ) -> None:
         self.min_regions = min_regions
+        self.imei_min_confidence = imei_min_confidence
 
     # =========================================================
     # SINGLE BLOB API
     # =========================================================
 
     def extract(self, text: str | None) -> dict[str, Any]:
+        """
+        Single-blob API. No per-line scores available here, so the
+        IMEI confidence gate is NOT applied. This path is a fallback
+        for callers that don't have scored lines.
+        """
         if not text:
             return {"serial_number": "", "imei": ""}
         lines = self._prepare_lines(text)
         return {
             "serial_number": self._extract_serial(lines),
-            "imei": self._extract_imei(lines),
+            "imei": self._extract_imei(lines, scored_lines=None),
         }
 
     # =========================================================
@@ -149,8 +160,16 @@ class UniversalOCRExtractor:
     # =========================================================
 
     def extract_from_regions(
-        self, region_outputs: dict[str, str]
+        self,
+        region_outputs: dict[str, Any],
     ) -> dict[str, Any]:
+        """
+        region_outputs values may be:
+            - str
+                → old shape, no scored lines
+            - dict with keys "raw_output" and (optionally) "scored_lines"
+                → new shape from PaddleOCRBackend.postprocess()
+        """
         serial_scores: dict[str, dict[str, Any]] = defaultdict(
             lambda: {"regions": set(), "kind": "", "value": ""}
         )
@@ -158,9 +177,18 @@ class UniversalOCRExtractor:
             lambda: {"regions": set(), "value": ""}
         )
 
-        for region, text in region_outputs.items():
+        for region, payload in region_outputs.items():
+            # ---- Normalize payload shape ----
+            if isinstance(payload, dict):
+                text = payload.get("raw_output", "") or ""
+                scored_lines = payload.get("scored_lines")
+            else:
+                text = payload or ""
+                scored_lines = None
+
             if not text:
                 continue
+
             lines = self._prepare_lines(text)
 
             for value, kind in self._serial_candidates(lines):
@@ -170,12 +198,14 @@ class UniversalOCRExtractor:
                 entry["kind"] = kind
                 entry["value"] = value
 
-            for value in self._imei_candidates(lines):
+            for value in self._imei_candidates(
+                lines, scored_lines=scored_lines
+            ):
                 entry = imei_scores[value]
                 entry["regions"].add(region)
                 entry["value"] = value
 
-        # ---- pick best serial ----
+        # ---- pick best serial ---- (unchanged)
         best_serial = ""
         serial_conf = "none"
         serial_ev: dict[str, Any] = {}
@@ -210,7 +240,7 @@ class UniversalOCRExtractor:
                 "kind": chosen[1]["kind"],
             }
 
-        # ---- pick best IMEI ----
+        # ---- pick best IMEI ---- (unchanged)
         best_imei = ""
         if imei_scores:
             chosen_imei = max(
@@ -242,7 +272,7 @@ class UniversalOCRExtractor:
         return out
 
     # =========================================================
-    # SERIAL EXTRACTION
+    # SERIAL EXTRACTION (unchanged — no confidence gate)
     # =========================================================
 
     def _extract_serial(self, lines: list[str]) -> str:
@@ -339,17 +369,6 @@ class UniversalOCRExtractor:
                     candidates.append((digits, "letter_bleed"))
 
         # ---- PASS 5: BARE 8-DIGIT NUMERIC NEAR A SERIAL LABEL ----
-        # OCR sometimes emits the serial as a standalone 8-digit
-        # line with the label on an adjacent line (not the layout
-        # the two-line label logic in Pass 2 expects).
-        #
-        # Example (image 6):
-        #   SL
-        #   25357387        <- value on its own line
-        #   NO              <- label continuation BELOW
-        #
-        # Requires a serial label within +/- 2 lines to avoid
-        # picking up random 8-digit numbers elsewhere on the plate.
         for i, line in enumerate(lines):
             stripped = line.strip()
 
@@ -422,11 +441,15 @@ class UniversalOCRExtractor:
         return "", ""
 
     # =========================================================
-    # IMEI EXTRACTION
+    # IMEI EXTRACTION  ← changed: confidence gate
     # =========================================================
 
-    def _extract_imei(self, lines: list[str]) -> str:
-        cands = self._imei_candidates(lines)
+    def _extract_imei(
+        self,
+        lines: list[str],
+        scored_lines: list[tuple[str, float]] | None = None,
+    ) -> str:
+        cands = self._imei_candidates(lines, scored_lines=scored_lines)
         if not cands:
             return ""
         for c in cands:
@@ -434,7 +457,31 @@ class UniversalOCRExtractor:
                 return c
         return cands[0]
 
-    def _imei_candidates(self, lines: list[str]) -> list[str]:
+    def _imei_candidates(
+        self,
+        lines: list[str],
+        scored_lines: list[tuple[str, float]] | None = None,
+    ) -> list[str]:
+        """
+        Extract IMEI candidates.
+
+        If scored_lines is provided (list of (text, score)):
+            → any line whose score < self.imei_min_confidence is
+              removed before pattern matching.
+
+        If scored_lines is None:
+            → no confidence gate is applied (backward-compatible
+              with the single-blob path).
+        """
+        # ---- Apply IMEI confidence floor, if we have scores ----
+        if scored_lines is not None:
+            allowed = {
+                text for text, score in scored_lines
+                if score >= self.imei_min_confidence
+            }
+            # Keep only lines whose text appeared at/above the floor.
+            lines = [ln for ln in lines if ln in allowed]
+
         out: list[str] = []
 
         for line in lines:
